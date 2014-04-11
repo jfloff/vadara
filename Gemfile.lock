@@ -1,0 +1,22 @@
+GEM
+  remote: https://rubygems.org/
+  specs:
+    amq-protocol (1.9.2)
+    aws-sdk-core (2.0.0.rc6)
+      builder (~> 3.0)
+      jamespath
+      multi_json (~> 1.0)
+      multi_xml (~> 0.5)
+    builder (3.2.2)
+    bunny (1.2.0)
+      amq-protocol (>= 1.9.2)
+    jamespath (0.5.0)
+    multi_json (1.9.2)
+    multi_xml (0.5.5)
+
+PLATFORMS
+  ruby
+
+DEPENDENCIES
+  aws-sdk-core
+  bunny (>= 0.9.1)
