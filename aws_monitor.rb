@@ -39,8 +39,8 @@ begin
       statistics: request.statistics,
       start_time: request.start_time,
       end_time: request.end_time,
-      period: request.period,
-      dimensions: [{name: 'InstanceId', value: "#{instance_id}"}]
+      period: request.period
+      # dimensions: [{name: 'InstanceId', value: "#{instance_id}"}]
     )
 
     puts 'AWS RESULT = ' + YAML::dump(result)
