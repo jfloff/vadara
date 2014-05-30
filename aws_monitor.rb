@@ -7,13 +7,43 @@ require 'aws-sdk-core'
 require 'yaml'
 require_relative "monitor_request"
 
-conn = Bunny.new(:automatically_recover => false)
+
+def instances_ids()
+
+  ec2 = Aws::EC2.new
+
+  config = YAML.load_file('config.yml')
+
+  resp = ec2.describe_instances(
+    filters: [{
+      name: 'tag:' + config['instance_tag']['key'],
+      values: [config['instance_tag']['value']]
+    }]
+  )
+
+  ids = Array.new
+
+  resp['reservations'].each do |reservation|
+    reservation['instances'].each do |instance|
+      ids << {
+        name: "InstanceId",
+        value: instance.instance_id
+      }
+    end
+  end
+
+  return ids
+end
+
+config = YAML.load_file('config.yml')
+
+conn = Bunny.new(automatically_recover: false)
 conn.start
 
 channel = conn.create_channel
-queue = channel.queue("aws")
-
-config = YAML.load_file('config.yml')
+channel_fanout = channel.fanout(config['queues']['monitor']['fanout'])
+aws_queue = channel.queue(config['queues']['monitor']['aws']).bind(channel_fanout)
+reply_queue = channel.queue(config['queues']['monitor']['reply'])
 
 Aws.config = {
   access_key_id: config['cloud_providers']['aws']['access_key_id'],
@@ -25,28 +55,49 @@ cw = Aws::CloudWatch.new
 
 begin
   puts " [*] Waiting for messages. To exit press CTRL+C"
-  queue.subscribe(:block => true) do |delivery_info, properties, body|
+  aws_queue.subscribe(:block => true) do |delivery_info, properties, body|
     request_json = JSON.parse(body)
 
     request = MonitorRequest.new
     request.from_json! request_json
 
-    instance_id = 'i-e5281aa4'
+    if (request.metric_name = 'RequestCount')
+      namespace = 'AWS/ELB'
+      dimensions = [{
+        name: "LoadBalancerName",
+        value: config['cloud_providers']['aws']['load_balancer']['name']
+      }]
+    else
+      namespace = 'AWS/EC2',
+      dimensions = instances_ids()
+    end
 
-    result = cw.get_metric_statistics(
-      namespace: 'AWS/EC2',
+    options = {
+      # http://docs.aws.amazon.com/AmazonCloudWatch/latest/DeveloperGuide/aws-namespaces.html
+      namespace: namespace,
       metric_name: request.metric_name,
       statistics: request.statistics,
       start_time: request.start_time,
       end_time: request.end_time,
-      period: request.period
-      # dimensions: [{name: 'InstanceId', value: "#{instance_id}"}]
-    )
+      period: request.period,
+      dimensions: dimensions
+    }
 
-    puts 'AWS RESULT = ' + YAML::dump(result)
+    result = cw.get_metric_statistics(options)
+
+    datapoints_array = Array.new
+    result[:datapoints].each do |datapoint|
+      datapoints_array << datapoint.to_h
+    end
+
+    # Reply
+    reply_json = JSON.generate(datapoints_array)
+    channel.default_exchange.publish(reply_json, routing_key: reply_queue.name)
+    puts " [x] Sent 'Monitor Reply!'"
   end
 
 rescue Interrupt => _
   conn.close
   exit(0)
 end
+

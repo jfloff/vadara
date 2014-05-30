@@ -6,9 +6,7 @@ module Core
 
     end
 
-    def initQueue
-
-    end
-
-    private :initQueue
+    # INIT MONITOR
+    # INIT QUEUES
+    # INIT AWS CONFIG AND CLASS/QUEUE
 end
