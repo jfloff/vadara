@@ -1,0 +1,63 @@
+#########################################################################################
+#################################### CLOUD PROVIDERS ####################################
+#########################################################################################
+cps:
+  aws:
+    active: true
+    run: 'ruby cps/aws/core.rb'
+
+  rackspace:
+    active: false
+    username: 'jfloff'
+    api_key: 'fd61b3641c979036ba1d60f1b96f491d'
+    # http://docs.rackspace.com/loadbalancers/api/v1.0/clb-devguide/content/Service_Access_Endpoints-d1e517.html
+    region: 'LON'
+    # http://docs.rackspace.com/auth/api/v2.0/auth-client-devguide/content/Endpoints-d1e180.html
+    auth_url: 'https://lon.identity.api.rackspacecloud.com/v2.0'
+    # for private clouds
+    compute_url: ''
+    # http://docs.rackspace.com/servers/api/v2/cs-devguide/content/List_Flavors-d1e4188.html
+    instance:
+      flavor_id: 2
+      name: 'vadara'
+      image_id: '6110edfe-8589-4bb1-aa27-385f12242627'
+
+#########################################################################################
+######################################## QUEUES #########################################
+#########################################################################################
+
+queues:
+  core:
+    fanout: 'vadara.core.' #after the dot comes the cp name
+  monitor:
+    request: 'vadara-monitor-request'
+    reply: 'vadara-monitor-reply'
+    fanout: 'vadara-monitor'
+    aws: 'vadara-monitor-aws'
+    rackspace: 'vadara-monitor-rackspace'
+  scaler:
+    request: 'vadara-scaler-request'
+    reply: 'vadara-scaler-reply'
+    fanout: 'vadara-scaler'
+    aws: 'vadara-scaler-aws'
+
+#########################################################################################
+####################################### DATABASE ########################################
+#########################################################################################
+
+db:
+  username: root
+  password: root
+  host: localhost
+  port: 8086
+  name: 'vadara-db'
+  instances_series: 'instances'
+
+#########################################################################################
+####################################### INSTANCES #######################################
+#########################################################################################
+
+instance_tag:
+  key: 'vadara'
+  value: 'vadara'
+

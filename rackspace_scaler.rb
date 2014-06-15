@@ -21,19 +21,19 @@ reply_queue = channel.queue(config['queues']['monitor']['reply'])
 
 credentials = {
   provider: 'Rackspace',
-  rackspace_username: config['cloud_providers']['rackspace']['username'],
-  rackspace_api_key: config['cloud_providers']['rackspace']['api_key'],
+  rackspace_username: config['cps']['rackspace']['username'],
+  rackspace_api_key: config['cps']['rackspace']['api_key'],
   version: :v2,
-  rackspace_region: config['cloud_providers']['rackspace']['region'].downcase.to_sym,
-  rackspace_auth_url: config['cloud_providers']['rackspace']['auth_url']
+  rackspace_region: config['cps']['rackspace']['region'].downcase.to_sym,
+  rackspace_auth_url: config['cps']['rackspace']['auth_url']
 }
 
 compute = Fog::Compute.new(credentials)
 
 server = compute.servers.create(
-  name: config['cloud_providers']['rackspace']['instance']['name'],
-  flavor_id: config['cloud_providers']['rackspace']['instance']['flavor_id'],
-  image_id: config['cloud_providers']['rackspace']['instance']['image_id'],
+  name: config['cps']['rackspace']['instance']['name'],
+  flavor_id: config['cps']['rackspace']['instance']['flavor_id'],
+  image_id: config['cps']['rackspace']['instance']['image_id'],
   metadata: {
     vadara: 'vadara'
   }

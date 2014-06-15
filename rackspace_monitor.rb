@@ -21,10 +21,10 @@ reply_queue = channel.queue(config['queues']['monitor']['reply'])
 
 options = {
   provider: 'Rackspace',
-  rackspace_username: config['cloud_providers']['rackspace']['username'],
-  rackspace_api_key: config['cloud_providers']['rackspace']['api_key'],
-  rackspace_auth_url: config['cloud_providers']['rackspace']['auth_url'],
-  rackspace_region: config['cloud_providers']['rackspace']['region'].downcase.to_sym,
+  rackspace_username: config['cps']['rackspace']['username'],
+  rackspace_api_key: config['cps']['rackspace']['api_key'],
+  rackspace_auth_url: config['cps']['rackspace']['auth_url'],
+  rackspace_region: config['cps']['rackspace']['region'].downcase.to_sym,
   version: :v2
 }
 

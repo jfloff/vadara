@@ -3,7 +3,7 @@
 
 require 'bunny'
 require 'json'
-require 'YAML'
+require 'yaml'
 require_relative 'monitor_request'
 require_relative 'scaler_request'
 

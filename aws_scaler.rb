@@ -5,7 +5,9 @@ require 'bunny'
 require 'json'
 require 'aws-sdk-core'
 require 'yaml'
+require 'influxdb'
 require_relative 'scaler_request'
+
 
 def instances_ids()
 
@@ -33,22 +35,26 @@ end
 
 config = YAML.load_file('config.yml')
 
+influxdb = InfluxDB::Client.new config['db']['scaler'], {
+  username: config['db']['username'],
+  password: config['db']['password'],
+  time_precision: 's'
+}
+
+Aws.config = {
+  access_key_id: config['cps']['aws']['access_key_id'],
+  secret_access_key: config['cps']['aws']['secret_access_key'],
+  region: config['cps']['aws']['region']
+}
+
 conn = Bunny.new(automatically_recover: false)
 conn.start
-
 channel = conn.create_channel
 channel_fanout = channel.fanout(config['queues']['scaler']['fanout'])
 aws_queue = channel.queue(config['queues']['scaler']['aws']).bind(channel_fanout)
 reply_queue = channel.queue(config['queues']['scaler']['reply'])
 
-Aws.config = {
-  access_key_id: config['cloud_providers']['aws']['access_key_id'],
-  secret_access_key: config['cloud_providers']['aws']['secret_access_key'],
-  region: config['cloud_providers']['aws']['region']
-}
-
 created_instances_ids = instances_ids()
-
 ec2 = Aws::EC2.new
 begin
   puts " [*] Waiting for messages. To exit press CTRL+C"
@@ -62,16 +68,26 @@ begin
 
     if request.scale_up > 0
       resp = ec2.run_instances({
-          image_id: config['cloud_providers']['aws']['instance']['image_id'],
+          image_id: config['cps']['aws']['instance']['image_id'],
           min_count: request.scale_up,
           max_count: request.scale_up,
-          key_name: config['cloud_providers']['aws']['instance']['key_name'],
-          instance_type: config['cloud_providers']['aws']['instance']['instance_type'],
+          key_name: config['cps']['aws']['instance']['key_name'],
+          instance_type: config['cps']['aws']['instance']['instance_type'],
       })
+
+      puts YAML::dump(resp)
 
       new_instances_ids = Array.new
 
       resp.instances.each do |instance|
+
+        # write instance creation into db
+        data = {
+          value: instance.launch_time,
+          time: Time.now.to_i
+        }
+        influxdb.write_point('instance-create', data)
+
         new_instances_ids << instance.instance_id
       end
 

@@ -1,20 +1,27 @@
 GEM
   remote: https://rubygems.org/
   specs:
+    activesupport (4.1.1)
+      i18n (~> 0.6, >= 0.6.9)
+      json (~> 1.7, >= 1.7.7)
+      minitest (~> 5.1)
+      thread_safe (~> 0.1)
+      tzinfo (~> 1.1)
     amq-protocol (1.9.2)
-    aws-sdk-core (2.0.0.rc6)
+    aws-sdk-core (2.0.0.rc8)
       builder (~> 3.0)
       jamespath
       multi_json (~> 1.0)
       multi_xml (~> 0.5)
     builder (3.2.2)
-    bunny (1.2.0)
+    bunny (1.2.2)
       amq-protocol (>= 1.9.2)
-    excon (0.33.0)
-    fog (1.22.0)
+    excon (0.37.0)
+    fog (1.22.1)
       fog-brightbox
-      fog-core (~> 1.21, >= 1.21.1)
+      fog-core (~> 1.22)
       fog-json
+      ipaddress (~> 0.5)
       nokogiri (~> 1.5, >= 1.5.11)
     fog-brightbox (0.0.2)
       fog-core
@@ -28,22 +35,35 @@ GEM
       net-ssh (>= 2.1.3)
     fog-json (1.0.0)
       multi_json (~> 1.0)
-    formatador (0.2.4)
+    formatador (0.2.5)
+    i18n (0.6.9)
+    influxdb (0.1.8)
+      json
+    ipaddress (0.8.0)
     jamespath (0.5.0)
-    mime-types (2.2)
+    json (1.8.1)
+    mime-types (2.3)
     mini_portile (0.6.0)
-    multi_json (1.9.2)
+    minitest (5.3.4)
+    multi_json (1.10.1)
     multi_xml (0.5.5)
     net-scp (1.2.1)
       net-ssh (>= 2.6.5)
     net-ssh (2.9.1)
     nokogiri (1.6.2.1)
       mini_portile (= 0.6.0)
+    require_all (1.3.2)
+    thread_safe (0.3.4)
+    tzinfo (1.2.1)
+      thread_safe (~> 0.1)
 
 PLATFORMS
   ruby
 
 DEPENDENCIES
+  activesupport
   aws-sdk-core
-  bunny (>= 0.9.1)
+  bunny
   fog
+  influxdb
+  require_all
