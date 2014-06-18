@@ -30,30 +30,32 @@ scaler_ch = conn.create_channel
 scaler_q = scaler_ch.queue(config['queues']['scaler']['request'])
 
 request = Vadara::MonitorRequest.new
-request.metric_name = 'CPUUtilization'
-request.statistics = ['Average']
+
+# CPU
+request.metric_name = 'cpu_usage'
+request.statistics = ['avg','max']
 time = Time.new
-request.start_time = (time-8000).iso8601
+request.start_time = (time-4000).iso8601
 request.end_time = time.iso8601
-request.period = 120
+request.period = 60
+request.detail = 'condensed' #detailed|condensed
+# agrupar por CP ou nao
+
+# REQUESTS
+# request.metric_name = 'request_count'
+# request.statistics = []
+# time = Time.new
+# request.start_time = (time-4000).iso8601
+# request.end_time = time.iso8601
+# request.period = 120
+# request.detail = 'condensed' #detailed|condensed
 
 request_json = request.to_json
 
 monitor_ch.default_exchange.publish(request_json, :routing_key => monitor_q.name)
 puts " [x] Sent 'Monitor Request!'"
 
-# request = MonitorRequest.new
-# request.metric_name = 'RequestCount'
-# request.statistics = ['Sum']
-# time = Time.new
-# request.start_time = (time-8000).iso8601
-# request.end_time = time.iso8601
-# request.period = 120
 
-# request_json = request.to_json
-
-# monitor_ch.default_exchange.publish(request_json, :routing_key => monitor_q.name)
-# puts " [x] Sent 'Monitor Request!'"
 
 # request = ScalerRequest.new
 # request.scale_up = 1

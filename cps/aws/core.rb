@@ -80,7 +80,7 @@ module AwsVadara
             # write instance creation into db
             instances << {
               instance_id: instance.instance_id,
-              launch_time: instance.launch_time.to_i
+              time: instance.launch_time.to_i
             }
           end
         end

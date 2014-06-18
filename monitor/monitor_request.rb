@@ -3,7 +3,7 @@ require_all 'helpers/jsonable.rb'
 
 module Vadara
   class MonitorRequest < JSONable
-    attr_accessor :metric_name, :statistics, :start_time, :end_time, :period
+    attr_accessor :metric_name, :statistics, :start_time, :end_time, :period, :detail
 
     def initialize(*args)
       # if argument was passed it is a json

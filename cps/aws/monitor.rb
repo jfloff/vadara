@@ -38,7 +38,7 @@ module AwsVadara
 
       # queues
       reply_queue = channel.queue(reply_queue_name)
-      provider_queue = channel.queue(@config['queue']).bind(channel_fanout)
+      provider_queue = channel.queue('').bind(channel_fanout)
 
       begin
         puts " [aws][monitor] Waiting for messages"
@@ -48,7 +48,7 @@ module AwsVadara
           puts " [aws][monitor] Received request"
 
           # reply to queue
-          reply = reply(request)
+          reply = JSON.generate(reply(request))
           # puts " [aws][monitor] " + reply
 
           # send reply to queue
@@ -102,7 +102,7 @@ module AwsVadara
           datapoints_array << datapoint.to_h
         end
 
-        return JSON.generate(datapoints_array)
+        return datapoints_array
       end
 
   end
