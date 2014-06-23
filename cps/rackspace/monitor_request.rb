@@ -2,7 +2,7 @@ require 'json'
 
 module RackspaceVadara
   class MonitorRequest
-    attr_accessor :metric_name, :statistics, :start_time, :end_time, :points, :detail
+    attr_accessor :metric_name, :statistics, :start_time, :end_time, :period, :detail
 
     def initialize(*args)
       # if argument was passed it is a json
@@ -26,14 +26,8 @@ module RackspaceVadara
         end
       end
 
-      # time has to be in miliseconds
-      @start_time = (Time.parse(@start_time).to_f * 1000).to_i
-      @end_time = (Time.parse(@end_time).to_f * 1000).to_i
-
-      # period comes in seconds, we have to find out how many points
-      # that period translates to for rackspace API
-      # http://docs.rackspace.com/cm/api/v1.0/cm-devguide/content/metrics-api.html#metrics-api-summary
-      @points = (@end_time - @start_time) / (@period * 1000)
+      @start_time = Time.parse(@start_time)
+      @end_time = Time.parse(@end_time)
     end
   end
 end

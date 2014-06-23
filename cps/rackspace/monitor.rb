@@ -19,6 +19,7 @@ module RackspaceVadara
         rackspace_region: @config['region'].downcase.to_sym,
       }
       @monitoring = Fog::Rackspace::Monitoring.new(options)
+      @load_balancers = Fog::Rackspace::LoadBalancers.new(options)
 
       @entities = entities
     end
@@ -47,7 +48,6 @@ module RackspaceVadara
 
           # reply to queue
           reply = JSON.generate(reply(request))
-          puts " [rackspace][monitor] REPLY = " + reply
 
           # send reply to queue
           channel.default_exchange.publish(reply, routing_key: reply_queue.name)
@@ -70,99 +70,117 @@ module RackspaceVadara
 
         case request.metric_name
           when 'cpu_usage'
-            reply_to_cpu_usage(request.statistics, request.start_time, request.end_time, request.points, request.detail)
+            reply_to_cpu_usage(request.statistics, request.start_time, request.end_time, request.period, request.detail)
+          when 'request_count'
+            reply_to_request_count()
         end
       end
 
-      def reply_to_cpu_usage(statistics, start_time, end_time, points, detail)
+      def reply_to_request_count()
+        reply = Hash.new
+        # atm not possible to know the total of requests of a lb
+        reply[:total_requests] = 'NA'
+
+        id = @config['load_balancer']['id']
+
+        # http://docs.rackspace.com/loadbalancers/api/v1.0/clb-devguide/content/API_Operations-d1e1354.html
+        # usage = @load_balancers.get_load_balancer_usage(id)
+        current_conn = @load_balancers.get_stats(id).body['currentConn']
+        reply[:current_requests] = current_conn
+
+        return reply
+      end
+
+      def reply_to_cpu_usage(statistics, start_time, end_time, period, detail)
+        # time has to be in miliseconds
+        start_time = (start_time.to_f * 1000).to_i
+        end_time = (end_time.to_f * 1000).to_i
+
+        # period comes in seconds, we have to find out how many points
+        # that period translates to for rackspace API
+        # http://docs.rackspace.com/cm/api/v1.0/cm-devguide/content/metrics-api.html#metrics-api-summary
+        points = (end_time - start_time) / (period * 1000)
+
         case detail
-          when 'detailed'
-            return detailed_reply(statistics, start_time, end_time, points)
           when 'condensed'
-            return condensed_reply(statistics, start_time, end_time, points)
-        end
-      end
+            all_points = Hash.new
 
-      def condensed_reply(statistics, start_time, end_time, points)
-        all_points = Hash.new
+            @entities.each do |entity|
+              # skips if entity doesn't has a cpu_check_id
+              next unless entity.has_key? :cpu_check_id
 
-        @entities.each do |entity|
-          # skips if entity doesn't has a cpu_check_id
-          next unless entity.has_key? :cpu_check_id
+              entity_id = entity[:entity_id]
 
-          entity_id = entity[:entity_id]
+              opts = { from: start_time, to: end_time, points: points, select: statistics }
+              data_points = @monitoring.list_data_points(entity_id, entity[:cpu_check_id], 'usage_average', opts).body.values[0]
 
-          opts = { from: start_time, to: end_time, points: points, select: statistics }
-          data_points = @monitoring.list_data_points(entity_id, entity[:cpu_check_id], 'usage_average', opts).body.values[0]
+              data_points.each do |data_point|
+                data_point.each do |statistic,value|
+                  all_points[statistic] = Array.new unless all_points.has_key? statistic
 
-          data_points.each do |data_point|
-            data_point.each do |statistic,value|
-              all_points[statistic] = Array.new unless all_points.has_key? statistic
-
-              # merges statistics with previous ones from other entities
-              all_points[statistic] << value
+                  # merges statistics with previous ones from other entities
+                  all_points[statistic] << value
+                end
+              end
             end
-          end
-        end
 
-        reply = Hash.new
-        if all_points.has_key? 'min'
-          reply['min'] = all_points['min'].min
-        end
-        if all_points.has_key? 'max'
-          reply['max'] = all_points['max'].max
-        end
-        if all_points.has_key? 'average'
-          reply['avg'] = all_points['average'].inject{ |sum, el| sum + el }.to_f / all_points['average'].size
-        end
-
-        return reply
-      end
-
-      def detailed_reply(statistics, start_time, end_time, points)
-        all_points = Hash.new
-
-        @entities.each do |entity|
-          # skips if entity doesn't has a cpu_check_id
-          next unless entity.has_key? :cpu_check_id
-
-          entity_id = entity[:entity_id]
-
-          opts = { from: start_time, to: end_time, points: points, select: statistics }
-          data_points = @monitoring.list_data_points(entity_id, entity[:cpu_check_id], 'usage_average', opts).body.values[0]
-
-          data_points.each do |data_point|
-            # remove miliseconds so we match more efficiently with other entities
-            timestamp = Time.at(data_point.delete('timestamp')/1000).change(sec: 0).to_i
-
-            #checks if its the fist timestamp
-            all_points[timestamp] = Hash.new unless all_points.has_key? timestamp
-
-            data_point.each do |statistic,value|
-              # inits array for values in case doesn't exist
-              all_points[timestamp][statistic] = Array.new unless all_points[timestamp].has_key? statistic
-              # merges statistics with previous ones from other entities
-              all_points[timestamp][statistic] << value
+            reply = Hash.new
+            if all_points.has_key? 'min'
+              reply['min'] = all_points['min'].min
             end
-          end
+            if all_points.has_key? 'max'
+              reply['max'] = all_points['max'].max
+            end
+            if all_points.has_key? 'average'
+              reply['avg'] = all_points['average'].inject{ |sum, el| sum + el }.to_f / all_points['average'].size
+            end
+
+            return reply
+          when 'detailed'
+            all_points = Hash.new
+
+            @entities.each do |entity|
+              # skips if entity doesn't has a cpu_check_id
+              next unless entity.has_key? :cpu_check_id
+
+              entity_id = entity[:entity_id]
+
+              opts = { from: start_time, to: end_time, points: points, select: statistics }
+              data_points = @monitoring.list_data_points(entity_id, entity[:cpu_check_id], 'usage_average', opts).body.values[0]
+
+              data_points.each do |data_point|
+                # remove miliseconds so we match more efficiently with other entities
+                timestamp = Time.at(data_point.delete('timestamp')/1000).change(sec: 0).to_i
+
+                #checks if its the fist timestamp
+                all_points[timestamp] = Hash.new unless all_points.has_key? timestamp
+
+                data_point.each do |statistic,value|
+                  # inits array for values in case doesn't exist
+                  all_points[timestamp][statistic] = Array.new unless all_points[timestamp].has_key? statistic
+                  # merges statistics with previous ones from other entities
+                  all_points[timestamp][statistic] << value
+                end
+              end
+            end
+
+            reply = Hash.new
+            all_points.each do |timestamp, statistics|
+              reply[timestamp] = Hash.new
+
+              if statistics.has_key? 'min'
+                reply[timestamp]['min'] = statistics['min'].min
+              end
+              if statistics.has_key? 'max'
+                reply[timestamp]['max'] = statistics['max'].max
+              end
+              if statistics.has_key? 'average'
+                reply[timestamp]['avg'] = statistics['average'].inject{ |sum, el| sum + el }.to_f / statistics['average'].size
+              end
+            end
+
+            return reply
         end
-
-        reply = Hash.new
-        all_points.each do |timestamp, statistics|
-          reply[timestamp] = Hash.new
-
-          if statistics.has_key? 'min'
-            reply[timestamp]['min'] = statistics['min'].min
-          end
-          if statistics.has_key? 'max'
-            reply[timestamp]['max'] = statistics['max'].max
-          end
-          if statistics.has_key? 'average'
-            reply[timestamp]['avg'] = statistics['average'].inject{ |sum, el| sum + el }.to_f / statistics['average'].size
-          end
-        end
-
-        return reply
       end
 
       def entities_ids

@@ -3,11 +3,11 @@
 #########################################################################################
 cps:
   aws:
-    active: false
+    active: true
     run: 'ruby cps/aws/core.rb'
 
   rackspace:
-    active: true
+    active: false
     run: 'ruby cps/rackspace/core.rb'
 
 #########################################################################################
@@ -25,7 +25,6 @@ queues:
     request: 'vadara-scaler-request'
     reply: 'vadara-scaler-reply'
     fanout: 'vadara-scaler'
-    aws: 'vadara-scaler-aws'
 
 #########################################################################################
 ####################################### DATABASE ########################################

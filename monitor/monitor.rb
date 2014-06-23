@@ -39,7 +39,7 @@ module Vadara
 
           providers_channel_fanout.publish(request.to_json)
           puts " [vadara][monitor] Sent CP request"
-          # puts " [vadara][monitor] " + request.to_json
+          puts " [vadara][monitor] request = " + request.to_json
         end
       end
 
@@ -52,7 +52,7 @@ module Vadara
           request = JSON.parse(body)
 
           puts " [vadara][monitor] Received CP reply"
-          # puts " [vadara][monitor] " + request.to_json
+          puts " [vadara][monitor] reply = " + request.to_json
 
           # aggregate requests from CPs??
         end
