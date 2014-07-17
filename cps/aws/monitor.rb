@@ -8,8 +8,10 @@ require_rel 'monitor_request.rb'
 module AwsVadara
   class Monitor
 
-    def initialize(ids)
-      @ids = ids
+    def initialize(instances,lock)
+      @instances = instances
+      @lock = lock
+
       @config = YAML.load_file(File.dirname(__FILE__) + '/aws.yml')
 
       Aws.config = {
@@ -22,39 +24,43 @@ module AwsVadara
     end
 
     def run(request_queue_name, reply_queue_name, fanout)
+      return Thread.new {
+        # init channel
+        conn = Bunny.new(automatically_recover: false)
+        conn.start
+        channel = conn.create_channel
 
-      # init channel
-      conn = Bunny.new(automatically_recover: false)
-      conn.start
-      channel = conn.create_channel
+        # fanout for exchange
+        channel_fanout = channel.fanout(fanout)
 
-      # fanout for exchange
-      channel_fanout = channel.fanout(fanout)
+        # queues
+        reply_queue = channel.queue(reply_queue_name)
+        provider_queue = channel.queue('').bind(channel_fanout)
 
-      # queues
-      reply_queue = channel.queue(reply_queue_name)
-      provider_queue = channel.queue('').bind(channel_fanout)
+        begin
+          puts " [aws][monitor] Waiting for messages"
+          provider_queue.subscribe(:block => true) do |delivery_info, properties, body|
 
-      begin
-        puts " [aws][monitor] Waiting for messages"
-        provider_queue.subscribe(:block => true) do |delivery_info, properties, body|
-          # request
-          request = request(body)
-          puts " [aws][monitor] Received request"
+            # request
+            request = request(body)
+            puts " [aws][monitor] Received request"
 
-          # reply to queue
-          reply = JSON.generate(reply(request))
-          # puts " [aws][monitor] " + reply
+            # reply to queue
+            reply = JSON.generate(reply(request))
+            # puts " [aws][monitor] " + reply
 
-          # send reply to queue
-          channel.default_exchange.publish(reply, routing_key: reply_queue.name)
-          puts " [aws][monitor] Sent reply!"
+            # send reply to queue
+            channel.default_exchange.publish(reply,
+              headers: { vadara: { provider: 'aws' } },
+              routing_key: reply_queue.name)
+            puts " [aws][monitor] Sent reply!"
+          end
+        rescue Interrupt => _
+          puts "[aws][monitor] Closing connection."
+          conn.close
+          Thread.exit
         end
-      rescue Interrupt => _
-        puts "[aws][monitor] Closing connection."
-        conn.close
-        exit
-      end
+      }
     end
 
     # private
@@ -117,21 +123,24 @@ module AwsVadara
         case detail
         when 'detailed'
           all_datapoints = Hash.new
-          @ids.each do |id|
-            options[:dimensions] =  [{ name: "InstanceId", value: id }]
 
-            result = @cw.get_metric_statistics(options)
-            result[:datapoints].each do |datapoint|
-              timestamp = datapoint['timestamp']
+          @lock.synchronize {
+            @instances.each do |id,v|
+              options[:dimensions] =  [{ name: "InstanceId", value: id }]
 
-              all_datapoints[timestamp] = Hash.new unless all_datapoints.has_key? timestamp
+              result = @cw.get_metric_statistics(options)
+              result[:datapoints].each do |datapoint|
+                timestamp = datapoint['timestamp']
 
-              statistics.each do |statistic|
-                all_datapoints[timestamp][statistic] = Array.new unless all_datapoints[timestamp].has_key? statistic
-                all_datapoints[timestamp][statistic] << datapoint[statistic]
+                all_datapoints[timestamp] = Hash.new unless all_datapoints.has_key? timestamp
+
+                statistics.each do |statistic|
+                  all_datapoints[timestamp][statistic] = Array.new unless all_datapoints[timestamp].has_key? statistic
+                  all_datapoints[timestamp][statistic] << datapoint[statistic]
+                end
               end
             end
-          end
+          }
 
           reply = Hash.new
           all_datapoints.each do |timestamp, statistics|
@@ -151,17 +160,19 @@ module AwsVadara
           return reply
         when 'condensed'
           all_datapoints = Hash.new
-          @ids.each do |id|
-            options[:dimensions] =  [{ name: "InstanceId", value: id }]
+          @lock.synchronize {
+            @instances.each do |id,v|
+              options[:dimensions] =  [{ name: "InstanceId", value: id }]
 
-            result = @cw.get_metric_statistics(options)
-            result[:datapoints].each do |datapoint|
-              statistics.each do |statistic|
-                all_datapoints[statistic] = Array.new unless all_datapoints.has_key? statistic
-                all_datapoints[statistic] << datapoint[statistic]
+              result = @cw.get_metric_statistics(options)
+              result[:datapoints].each do |datapoint|
+                statistics.each do |statistic|
+                  all_datapoints[statistic] = Array.new unless all_datapoints.has_key? statistic
+                  all_datapoints[statistic] << datapoint[statistic]
+                end
               end
             end
-          end
+          }
 
           reply = Hash.new
           if all_datapoints.has_key? 'min'

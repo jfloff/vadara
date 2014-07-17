@@ -3,7 +3,8 @@ require 'json'
 require 'aws-sdk-core'
 require 'require_all'
 require 'bunny'
-require_rel 'monitor.rb'
+require_rel 'monitor.rb', 'scaler.rb'
+require 'thread'
 
 module AwsVadara
   class Core
@@ -16,6 +17,9 @@ module AwsVadara
         secret_access_key: @config['secret_access_key'],
         region: @config['region']
       }
+
+      @instances = Hash.new
+      @lock = Mutex.new
     end
 
 
@@ -30,9 +34,12 @@ module AwsVadara
       reply_queue = ch.queue("", exclusive: true)
 
       # publish instances from AWS
-      instances_data = instances
+      instances_data = instances()
       puts " [aws][core] Sent instances details"
-      x.publish(JSON.generate(instances_data), routing_key: queue_name, reply_to: reply_queue.name)
+      x.publish(JSON.generate(instances_data),
+        headers: { vadara: { provider: 'aws' } },
+        routing_key: queue_name,
+        reply_to: reply_queue.name)
 
       queues_data = nil
       reply_queue.subscribe(:block => true) do |delivery_info, properties, payload|
@@ -44,12 +51,33 @@ module AwsVadara
       end
       conn.close
 
-      ids = instances_ids(instances_data)
-
       puts " [aws][core] Starting aws provider services!"
 
       # starts the monitor
-      start_monitor(queues_data['request'], queues_data['reply'], queues_data['fanout'], ids)
+      puts " [aws][core] Starting Monitor ..."
+      monitor = AwsVadara::Monitor.new(@instances,@lock)
+      monitor_t = monitor.run(queues_data['monitor']['request'],
+        queues_data['monitor']['reply'],
+        queues_data['monitor']['fanout'])
+
+      # starts the scaler
+      puts " [aws][core] Starting Scaler ..."
+      scaler = AwsVadara::Scaler.new(@instances, @lock, queues_data['scaler']['min_bootup_time'])
+      scaler_t = scaler.run(queues_data['scaler']['request'],
+        queues_data['scaler']['reply'],
+        queues_data['scaler']['fanout'])
+
+      puts " [aws][core] rackspace provider ready!"
+
+      # joins both threads
+      # passes Interrupt on both
+      begin
+        monitor_t.join
+        scaler_t.join
+      rescue Interrupt => e
+        monitor_t.raise e
+        scaler_t.raise e
+      end
 
       puts " [aws][core] aws provider ready!"
     end
@@ -77,30 +105,16 @@ module AwsVadara
         instances = Array.new
         resp['reservations'].each do |reservation|
           reservation['instances'].each do |instance|
-            # write instance creation into db
             instances << {
               instance_id: instance.instance_id,
-              time: instance.launch_time.to_i
+              launch_time: instance.launch_time.to_i
             }
+
+            @instances[instance.instance_id] = {}
           end
         end
 
         return instances
-      end
-
-      def instances_ids(instances)
-        ids = Array.new
-        instances.each do |instance|
-          ids << instance[:instance_id]
-        end
-        return ids
-      end
-
-      def start_monitor(request, reply, fanout, ids)
-        puts " [aws][core] Starting Monitor ..."
-
-        monitor = AwsVadara::Monitor.new ids
-        monitor.run(request, reply, fanout)
       end
   end
 end

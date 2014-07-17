@@ -14,14 +14,20 @@ module Vadara
     end
 
     def run
-      begin
-        Thread.new { reply_to_decider }
-        receive_from_decider
-      rescue Interrupt => _
-        @conn.close
-        puts " [vadara][monitor] Closing connection"
-        exit(0)
-      end
+      return Thread.new{
+        begin
+          reply_t = Thread.new { reply_to_decider }
+          receive_t = Thread.new { receive_from_decider }
+
+          reply_t.join
+          receive_t.join
+
+        rescue Interrupt => _
+          @conn.close
+          puts " [vadara][monitor] Closing connection"
+          Thread.exit
+        end
+      }
     end
 
     private

@@ -3,13 +3,14 @@ require 'json'
 require 'bunny'
 require 'fog'
 require 'require_all'
+require 'thread'
 require 'active_support/core_ext/time'
 require_rel 'monitor_request.rb'
 
 module RackspaceVadara
   class Monitor
 
-    def initialize(entities)
+    def initialize(entities,lock)
       @config = YAML.load_file(File.dirname(__FILE__) + '/rackspace.yml')
 
       options = {
@@ -22,42 +23,46 @@ module RackspaceVadara
       @load_balancers = Fog::Rackspace::LoadBalancers.new(options)
 
       @entities = entities
+      @lock = lock
     end
 
     def run(request_queue_name, reply_queue_name, fanout)
+      return Thread.new {
+        # init channel
+        conn = Bunny.new(automatically_recover: false)
+        conn.start
+        channel = conn.create_channel
 
-      # init channel
-      conn = Bunny.new(automatically_recover: false)
-      conn.start
-      channel = conn.create_channel
+        # fanout for exchange
+        channel_fanout = channel.fanout(fanout)
 
-      # fanout for exchange
-      channel_fanout = channel.fanout(fanout)
+        # queues
+        reply_queue = channel.queue(reply_queue_name)
+        provider_queue = channel.queue('').bind(channel_fanout)
 
-      # queues
-      reply_queue = channel.queue(reply_queue_name)
-      provider_queue = channel.queue('').bind(channel_fanout)
+        begin
+          puts " [rackspace][monitor] Waiting for messages"
+          provider_queue.subscribe(:block => true) do |delivery_info, properties, body|
 
-      begin
-        puts " [rackspace][monitor] Waiting for messages"
-        provider_queue.subscribe(:block => true) do |delivery_info, properties, body|
+            # request
+            request = request(body)
+            puts " [rackspace][monitor] Received request"
 
-          # request
-          request = request(body)
-          puts " [rackspace][monitor] Received request"
+            # reply to queue
+            reply = JSON.generate(reply(request))
 
-          # reply to queue
-          reply = JSON.generate(reply(request))
-
-          # send reply to queue
-          channel.default_exchange.publish(reply, routing_key: reply_queue.name)
-          puts " [rackspace][monitor] Sent reply!"
+            # send reply to queue
+            channel.default_exchange.publish(reply,
+              headers: { vadara: { provider: 'rackspace' } },
+              routing_key: reply_queue.name)
+            puts " [rackspace][monitor] Sent reply!"
+          end
+        rescue Interrupt => _
+          puts "[rackspace][monitor] Closing connection."
+          conn.close
+          Thread.exit
         end
-      rescue Interrupt => _
-        puts "[rackspace][monitor] Closing connection."
-        conn.close
-        exit
-      end
+      }
     end
 
     private
@@ -105,24 +110,24 @@ module RackspaceVadara
           when 'condensed'
             all_points = Hash.new
 
-            @entities.each do |entity|
-              # skips if entity doesn't has a cpu_check_id
-              next unless entity.has_key? :cpu_check_id
+            @lock.synchronize {
+              @entities.each do |entity_id, info|
+                # skips if entity doesn't has a cpu_check_id
+                next unless info.has_key? :cpu_check_id
 
-              entity_id = entity[:entity_id]
+                opts = { from: start_time, to: end_time, points: points, select: statistics }
+                data_points = @monitoring.list_data_points(entity_id, info[:cpu_check_id], 'usage_average', opts).body.values[0]
 
-              opts = { from: start_time, to: end_time, points: points, select: statistics }
-              data_points = @monitoring.list_data_points(entity_id, entity[:cpu_check_id], 'usage_average', opts).body.values[0]
+                data_points.each do |data_point|
+                  data_point.each do |statistic,value|
+                    all_points[statistic] = Array.new unless all_points.has_key? statistic
 
-              data_points.each do |data_point|
-                data_point.each do |statistic,value|
-                  all_points[statistic] = Array.new unless all_points.has_key? statistic
-
-                  # merges statistics with previous ones from other entities
-                  all_points[statistic] << value
+                    # merges statistics with previous ones from other entities
+                    all_points[statistic] << value
+                  end
                 end
               end
-            end
+            }
 
             reply = Hash.new
             if all_points.has_key? 'min'
@@ -139,30 +144,30 @@ module RackspaceVadara
           when 'detailed'
             all_points = Hash.new
 
-            @entities.each do |entity|
-              # skips if entity doesn't has a cpu_check_id
-              next unless entity.has_key? :cpu_check_id
+            @lock.synchronize {
+              @entities.each do |entity_id, info|
+                # skips if entity doesn't has a cpu_check_id
+                next unless info.has_key? :cpu_check_id
 
-              entity_id = entity[:entity_id]
+                opts = { from: start_time, to: end_time, points: points, select: statistics }
+                data_points = @monitoring.list_data_points(entity_id, info[:cpu_check_id], 'usage_average', opts).body.values[0]
 
-              opts = { from: start_time, to: end_time, points: points, select: statistics }
-              data_points = @monitoring.list_data_points(entity_id, entity[:cpu_check_id], 'usage_average', opts).body.values[0]
+                data_points.each do |data_point|
+                  # remove miliseconds so we match more efficiently with other entities
+                  timestamp = Time.at(data_point.delete('timestamp')/1000).change(sec: 0).to_i
 
-              data_points.each do |data_point|
-                # remove miliseconds so we match more efficiently with other entities
-                timestamp = Time.at(data_point.delete('timestamp')/1000).change(sec: 0).to_i
+                  #checks if its the fist timestamp
+                  all_points[timestamp] = Hash.new unless all_points.has_key? timestamp
 
-                #checks if its the fist timestamp
-                all_points[timestamp] = Hash.new unless all_points.has_key? timestamp
-
-                data_point.each do |statistic,value|
-                  # inits array for values in case doesn't exist
-                  all_points[timestamp][statistic] = Array.new unless all_points[timestamp].has_key? statistic
-                  # merges statistics with previous ones from other entities
-                  all_points[timestamp][statistic] << value
+                  data_point.each do |statistic,value|
+                    # inits array for values in case doesn't exist
+                    all_points[timestamp][statistic] = Array.new unless all_points[timestamp].has_key? statistic
+                    # merges statistics with previous ones from other entities
+                    all_points[timestamp][statistic] << value
+                  end
                 end
               end
-            end
+            }
 
             reply = Hash.new
             all_points.each do |timestamp, statistics|
@@ -181,14 +186,6 @@ module RackspaceVadara
 
             return reply
         end
-      end
-
-      def entities_ids
-        ids = Array.new
-        @monitoring.entities.all.each do |entity|
-          ids << entity.id if @instances_ids.include? entity.agent_id
-        end
-        return ids
       end
   end
 end
