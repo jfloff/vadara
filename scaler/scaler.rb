@@ -63,7 +63,7 @@ module Vadara
         to_delete = Hash.new
         request_scale_down.each do |provider, n|
           # sort instances by time
-          instances = @instances[provider].sort  { |x, y| x[:launch_time] <=> x[:launch_time] }
+          instances = @instances[provider].sort  { |x, y| x[:launch_time] <=> y[:launch_time] }
 
           if @config[:cps][provider.to_sym][:full_period_unit] == 'h'
           else
