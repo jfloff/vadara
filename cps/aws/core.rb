@@ -67,7 +67,7 @@ module AwsVadara
         queues_data['scaler']['reply'],
         queues_data['scaler']['fanout'])
 
-      puts " [aws][core] rackspace provider ready!"
+      puts " [aws][core] aws provider ready!"
 
       # joins both threads
       # passes Interrupt on both

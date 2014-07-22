@@ -1,7 +1,7 @@
 require 'bunny'
 require 'json'
 require 'require_all'
-require 'securerandom'
+require 'thread'
 require_rel 'scaler_request.rb'
 
 module Vadara
@@ -16,6 +16,31 @@ module Vadara
 
       @instances = Hash.new
       @bootup_times = Hash.new
+
+      @instances_to_delete = Hash.new
+      @lock = Mutex.new
+
+      @sort_full_hour_block = Proc.new { |x, y|
+        now = Time.now
+
+        # 60 modulo of the minutes different gives in the rest the number of minutes
+        # since the new hour begun --> the more minutes, the closer it is
+        diff1 = ((now - x[:launch_time]) / 60) % 60
+        diff2 = ((now - y[:launch_time]) / 60) % 60
+
+        # smallest different first
+        diff2 <=> diff1
+      }
+
+      # init for all active CPs
+      @config[:cps].each do |provider,info|
+        next unless info[:active]
+        provider = provider.to_s
+
+        @instances[provider] = Array.new
+        @bootup_times[provider] = Array.new
+        @instances_to_delete[provider] = Array.new
+      end
 
       load_db_info
     end
@@ -44,6 +69,7 @@ module Vadara
 
         providers_channel = @conn.create_channel
         providers_channel_fanout = providers_channel.fanout(@config[:queues][:scaler][:fanout])
+        run_hour_scale_down_thread(providers_channel_fanout)
 
         puts " [vadara][scaler] Waiting `decider` messages"
         scaler_queue.subscribe(:block => true) do |delivery_info, properties, payload|
@@ -51,29 +77,11 @@ module Vadara
 
           request.horizontal_scale_down = instances_to_scale_down(request.horizontal_scale_down)
 
-          correlation_id = SecureRandom.uuid
-          providers_channel_fanout.publish(request.to_json, correlation_id: correlation_id)
+          providers_channel_fanout.publish(request.to_json)
 
           puts " [vadara][scaler] Sent CP request"
           puts " [vadara][scaler] request = " + request.to_json
         end
-      end
-
-      def instances_to_scale_down(request_scale_down)
-        to_delete = Hash.new
-        request_scale_down.each do |provider, n|
-          # sort instances by time
-          instances = @instances[provider].sort  { |x, y| x[:launch_time] <=> y[:launch_time] }
-
-          if @config[:cps][provider.to_sym][:full_period_unit] == 'h'
-          else
-            to_delete[provider] = Array.new
-            instances.shift(n).each do |instance|
-              to_delete[provider] << instance[:instance_id]
-            end
-          end
-        end
-        return to_delete
       end
 
       def min_bootup_times
@@ -128,13 +136,7 @@ module Vadara
         instances_series = @config[:db][:instances_series]
         bootup_times_series = @config[:db][:bootup_times_series]
 
-        @config[:cps].each do |provider,info|
-          next unless info[:active]
-
-          provider = provider.to_s
-
-          # load instances for all active
-          @instances[provider] = Array.new
+        @instances.each do |provider,info|
 
           @db.query "SELECT instance_id, launch_time FROM #{instances_series} WHERE provider = '#{provider}'" do |name,points|
             points.each do |point|
@@ -145,15 +147,82 @@ module Vadara
             end
           end
 
-          # load providers bootup time
-          @bootup_times[provider] = Array.new
-
           @db.query "SELECT bootup_time FROM #{bootup_times_series} WHERE provider = '#{provider}'" do |name,points|
             points.each do |point|
               @bootup_times[provider] << point['bootup_time']
             end
           end
         end
+      end
+
+      ########################################################################################
+      ###################################### SCALE DOWN ######################################
+      ########################################################################################
+
+      def instances_to_scale_down(request_scale_down)
+        to_delete = Hash.new
+        request_scale_down.each do |provider, n|
+
+          if @config[:cps][provider.to_sym][:full_period_unit] == 'h'
+            to_delete[provider] = hour_scale_down(provider, n)
+          else
+            to_delete[provider] = min_sec_scale_down(provider, n)
+          end
+
+        end
+        return to_delete
+      end
+
+      def hour_scale_down(provider, n)
+
+        instances = @instances[provider].sort(&@sort_full_hour_block)
+
+        instances.shift(n).each do |instance|
+          @lock.synchronize {
+            @instances_to_delete[provider] << instance[:instance_id]
+          }
+        end
+      end
+
+      def run_hour_scale_down_thread(fanout)
+        instances_near_full_hour = Hash.new
+        @lock.synchronize {
+          @instances_to_delete.each do |provider, instances_to_delete|
+            # select instances that are above 55mins left in the
+            instances = instances_to_delete.select { |x| x >= 55 }
+
+            unless instances.empty?
+              instances_near_full_hour[provider] = instances
+            end
+          end
+        }
+
+        # if there are any instances near full hour sends order to terminate them
+        # removes them from its queue
+        unless instances_near_full_hour.empty?
+          request = ScalerRequest.new
+          request.horizontal_scale_down =
+          fanout.publish(request.to_json)
+        end
+
+        max = 0
+        @instances.each do |provider, instances|
+          instance_max = instances.sort(&@sort_full_hour_block).max
+
+          max = instance_max > max ? instance_max : max
+        end
+
+        sleep(50 - max)
+      end
+
+      def min_sec_scale_down(provider, n)
+        # sort instances by time
+        instances = @instances[provider].sort  { |x, y| x[:launch_time] <=> y[:launch_time] }
+        to_delete = Array.new
+        instances.shift(n).each do |instance|
+          to_delete << instance[:instance_id]
+        end
+        return to_delete
       end
   end
 end

@@ -67,8 +67,8 @@ else
   scaler_q = scaler_ch.queue(config['queues']['scaler']['request'])
 
   request = Vadara::ScalerRequest.new
-  request.horizontal_scale_up = { 'aws' => 1 }
-  request.horizontal_scale_down = { 'aws' => 0 }
+  request.horizontal_scale_up = { 'aws' => 0 }
+  request.horizontal_scale_down = { 'aws' => 1 }
 
   request_json = request.to_json
 
