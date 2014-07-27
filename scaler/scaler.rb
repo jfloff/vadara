@@ -7,9 +7,17 @@ require_rel 'scaler_request.rb'
 module Vadara
   class Scaler
 
+
     def initialize(config,db)
+      @sort_instances_by_full_period = Proc.new { |x|
+        # since the new hour begun --> the more minutes, the closer it is
+        now = Time.now
+        ((now - x[:launch_time]) / 60) % 60
+      }
+
       @config = config
       @db = db
+      @hour_scale_down_thread = nil
 
       @conn = Bunny.new(automatically_recover: false)
       @conn.start
@@ -17,20 +25,8 @@ module Vadara
       @instances = Hash.new
       @bootup_times = Hash.new
 
-      @instances_to_delete = Hash.new
+      @instances_near_full_hour = Hash.new
       @lock = Mutex.new
-
-      @sort_full_hour_block = Proc.new { |x, y|
-        now = Time.now
-
-        # 60 modulo of the minutes different gives in the rest the number of minutes
-        # since the new hour begun --> the more minutes, the closer it is
-        diff1 = ((now - x[:launch_time]) / 60) % 60
-        diff2 = ((now - y[:launch_time]) / 60) % 60
-
-        # smallest different first
-        diff2 <=> diff1
-      }
 
       # init for all active CPs
       @config[:cps].each do |provider,info|
@@ -39,7 +35,7 @@ module Vadara
 
         @instances[provider] = Array.new
         @bootup_times[provider] = Array.new
-        @instances_to_delete[provider] = Array.new
+        @instances_near_full_hour[provider] = Array.new
       end
 
       load_db_info
@@ -54,6 +50,7 @@ module Vadara
           reply_t.join
           receive_t.join
         rescue Interrupt => _
+          @hour_scale_down_thread.kill
           @conn.close
           puts " [vadara][scaler] Closing connection"
           Thread.exit
@@ -69,13 +66,16 @@ module Vadara
 
         providers_channel = @conn.create_channel
         providers_channel_fanout = providers_channel.fanout(@config[:queues][:scaler][:fanout])
-        run_hour_scale_down_thread(providers_channel_fanout)
+        @hour_scale_down_thread = run_hour_scale_down_thread(providers_channel_fanout)
 
         puts " [vadara][scaler] Waiting `decider` messages"
         scaler_queue.subscribe(:block => true) do |delivery_info, properties, payload|
           request = ScalerRequest.new JSON.parse(payload)
 
+          # scales down the instances
           request.horizontal_scale_down = instances_to_scale_down(request.horizontal_scale_down)
+          # checks if any instance to delete that could be rescued
+          request.horizontal_scale_up = check_scale_up(request.horizontal_scale_up)
 
           providers_channel_fanout.publish(request.to_json)
 
@@ -159,6 +159,32 @@ module Vadara
       ###################################### SCALE DOWN ######################################
       ########################################################################################
 
+      def check_scale_up(scale_up_by_provider)
+
+        scale_up_by_provider.each do |provider,n|
+          # skips if 0
+          next if n <= 0
+
+          # sort instances by closest to full_time and removes the furthest away
+          instances_to_keep = nil
+          @lock.synchronize {
+            instances_to_keep = @instances_near_full_hour[provider].sort!(&@sort_instances_by_full_period).pop(n)
+          }
+
+          # add those instances
+          @instances[provider] += instances_to_keep
+          # reduce the number of instances to scale up
+          n -= instances_to_keep.length
+          scale_up_by_provider[provider] = (n < 0) ? 0 : n
+        end
+
+        return scale_up_by_provider
+      end
+
+      ########################################################################################
+      ###################################### SCALE DOWN ######################################
+      ########################################################################################
+
       def instances_to_scale_down(request_scale_down)
         to_delete = Hash.new
         request_scale_down.each do |provider, n|
@@ -175,44 +201,86 @@ module Vadara
 
       def hour_scale_down(provider, n)
 
-        instances = @instances[provider].sort(&@sort_full_hour_block)
+        # removes closest to full period from instances
+        instances_to_remove = @instances[provider].sort_by!(&@sort_instances_by_full_period).shift(n)
 
-        instances.shift(n).each do |instance|
-          @lock.synchronize {
-            @instances_to_delete[provider] << instance[:instance_id]
-          }
+        # adds all instances to delete
+        @lock.synchronize {
+          @instances_near_full_hour[provider] += instances_to_remove
+        }
+
+        # tries to wake up thread, but only if it's sleeping, otherwise waits
+        loop do
+          if @hour_scale_down_thread.status == 'sleep'
+            @hour_scale_down_thread.wakeup
+            break
+          end
         end
+
+        return []
       end
 
       def run_hour_scale_down_thread(fanout)
-        instances_near_full_hour = Hash.new
-        @lock.synchronize {
-          @instances_to_delete.each do |provider, instances_to_delete|
-            # select instances that are above 55mins left in the
-            instances = instances_to_delete.select { |x| x >= 55 }
+        return Thread.new {
+          loop do
+            instances_to_delete = Hash.new
 
-            unless instances.empty?
-              instances_near_full_hour[provider] = instances
+            print " [vadara][core] instances waiting shutdown: "
+            puts @instances_near_full_hour
+
+            @lock.synchronize {
+              @instances_near_full_hour.each do |provider, instances_near_full_hour_by_provider|
+
+                # select instances that are above lag minutes left in the full period
+                instances = instances_near_full_hour_by_provider.select{ |x|
+                  @sort_instances_by_full_period.call(x) >= @config[:full_period][:h_lag]
+                }
+
+                # delete the ones that are above the threshold
+                @instances_near_full_hour[provider] = instances_near_full_hour_by_provider.select { |x|
+                  @sort_instances_by_full_period.call(x) < @config[:full_period][:h_lag]
+                }
+
+                unless instances.empty?
+                  # select only the ones
+                  to_delete = Array.new
+                  instances.each do |instance|
+                    to_delete << instance[:instance_id]
+                  end
+
+                  instances_to_delete[provider] = to_delete
+                end
+              end
+            }
+
+            # if there are any instances near full hour sends order to terminate them
+            # removes them from its queue
+            unless instances_to_delete.empty?
+
+              request = ScalerRequest.new
+              request.horizontal_scale_down = instances_to_delete
+
+              fanout.publish(request.to_json)
+              puts " [vadara][scaler] Sent CP request"
+              puts " [vadara][scaler] request = " + request.to_json
             end
+
+            max = -1
+            @lock.synchronize {
+              @instances_near_full_hour.each do |p, instances|
+                next if instances.empty?
+
+                # finds the max time thread has to wait for next delete
+                instance_max = instances.map(&@sort_instances_by_full_period).max
+                max = instance_max > max ? instance_max : max
+              end
+            }
+
+            # if no max found sleeps one minute
+            sleep_time = max < 0 ? 10 : max
+            sleep(sleep_time)
           end
         }
-
-        # if there are any instances near full hour sends order to terminate them
-        # removes them from its queue
-        unless instances_near_full_hour.empty?
-          request = ScalerRequest.new
-          request.horizontal_scale_down =
-          fanout.publish(request.to_json)
-        end
-
-        max = 0
-        @instances.each do |provider, instances|
-          instance_max = instances.sort(&@sort_full_hour_block).max
-
-          max = instance_max > max ? instance_max : max
-        end
-
-        sleep(50 - max)
       end
 
       def min_sec_scale_down(provider, n)

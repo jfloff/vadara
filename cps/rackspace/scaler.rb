@@ -61,10 +61,10 @@ module RackspaceVadara
             puts " [rackspace][scaler] Received request"
 
             # reply to queue
-            reply = JSON.generate(reply(request))
+            next if (reply = reply(request)).nil?
 
             # send reply to queue
-            channel.default_exchange.publish(reply,
+            channel.default_exchange.publish(JSON.generate(reply),
               routing_key: reply_queue.name,
               headers: { vadara: { provider: 'rackspace' } },
               correlation_id: properties.correlation_id
@@ -86,10 +86,10 @@ module RackspaceVadara
 
       def reply(request)
 
-        to_delete = horizontal_scale_down(request.horizontal_scale_down)
+        horizontal_scale_down(request.horizontal_scale_down)
         new_instances = horizontal_scale_up(request.horizontal_scale_up)
 
-        return { new_instances: new_instances }
+        return new_instances.empty? ? nil : { new_instances: new_instances }
       end
 
       def horizontal_scale_up(n)
@@ -153,11 +153,13 @@ module RackspaceVadara
 
         return if to_delete.empty?
 
+        # deregister fom LB
+        @load_balancers.delete_nodes(@config['load_balancer']['id'], to_delete)
+
+        # delete servers
         to_delete.each do |server_id|
           @compute.delete_server(server_id)
         end
-
-        @load_balancers.delete_nodes(@config['load_balancer']['id'], to_delete)
       end
   end
 end

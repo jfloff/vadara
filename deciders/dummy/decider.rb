@@ -24,10 +24,11 @@ conn = Bunny.new(:automatically_recover => false)
 conn.start
 
 if ARGV[0] == 'monitor'
+
   #########################################################################################
   ####################################### MONITOR #########################################
   #########################################################################################
-  #
+
   monitor_ch = conn.create_channel
   monitor_q = monitor_ch.queue(config['queues']['monitor']['request'])
 
@@ -57,7 +58,7 @@ if ARGV[0] == 'monitor'
 
   monitor_ch.default_exchange.publish(request_json, :routing_key => monitor_q.name)
   puts " [x] Sent 'Monitor Request!'"
-else
+elsif ARGV[0] == 'scaler'
 
   #########################################################################################
   ######################################## SCALER #########################################
@@ -68,7 +69,7 @@ else
 
   request = Vadara::ScalerRequest.new
   request.horizontal_scale_up = { 'aws' => 0 }
-  request.horizontal_scale_down = { 'aws' => 1 }
+  request.horizontal_scale_down = { 'aws' => 2 }
 
   request_json = request.to_json
 

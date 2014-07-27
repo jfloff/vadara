@@ -1,18 +1,4 @@
 #########################################################################################
-#################################### CLOUD PROVIDERS ####################################
-#########################################################################################
-cps:
-  aws:
-    active: true
-    run: 'ruby cps/aws/core.rb'
-    full_period_unit: 'h' # options: h(hour), m(minute), s(seconds)
-
-  rackspace:
-    active: false
-    run: 'ruby cps/rackspace/core.rb'
-    full_period_unit: 's'
-
-#########################################################################################
 ######################################## QUEUES #########################################
 #########################################################################################
 
@@ -22,11 +8,9 @@ queues:
   monitor:
     request: 'vadara-monitor-request'
     reply: 'vadara-monitor-reply'
-    fanout: 'vadara-monitor'
   scaler:
     request: 'vadara-scaler-request'
     reply: 'vadara-scaler-reply'
-    fanout: 'vadara-scaler'
 
 #########################################################################################
 ####################################### DATABASE ########################################
@@ -40,6 +24,3 @@ db:
   name: 'vadara-db'
   instances_series: 'instances'
   bootup_times_series: 'bootup_times'
-
-full_period:
-  h_lag: 57 #minute where it will start scaling down

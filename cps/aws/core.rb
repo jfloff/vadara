@@ -78,8 +78,6 @@ module AwsVadara
         monitor_t.raise e
         scaler_t.raise e
       end
-
-      puts " [aws][core] aws provider ready!"
     end
 
     private

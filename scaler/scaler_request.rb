@@ -11,6 +11,5 @@ module Vadara
         self.from_json! args[0]
       end
     end
-
   end
 end

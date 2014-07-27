@@ -45,15 +45,14 @@ module AwsVadara
           provider_queue.subscribe(:block => true) do |delivery_info, properties, payload|
 
             # request
+            puts " [aws][scaler] Received request"
             request = request(payload)
 
-            puts " [aws][scaler] Received request"
-
             # reply to queue
-            reply = JSON.generate(reply(request))
+            next if (reply = reply(request)).nil?
 
             # send reply to queue
-            channel.default_exchange.publish(reply,
+            channel.default_exchange.publish(JSON.generate(reply),
               routing_key: reply_queue.name,
               headers: { vadara: { provider: 'aws' } },
               correlation_id: properties.correlation_id
@@ -75,15 +74,19 @@ module AwsVadara
 
       def reply(request)
 
-        to_delete = horizontal_scale_down(request.horizontal_scale_down)
+        horizontal_scale_down(request.horizontal_scale_down)
         new_instances = horizontal_scale_up(request.horizontal_scale_up)
 
-        return { new_instances: new_instances }
+        return new_instances.empty? ? nil : { new_instances: new_instances }
       end
 
       def horizontal_scale_up(n)
 
         new_instances = Array.new
+
+        # returns
+        return new_instances if n <= 0
+
         n.times do
           resp = @ec2.run_instances(
             image_id: @config['instance']['image_id'],
@@ -154,11 +157,16 @@ module AwsVadara
 
         return if to_delete.empty?
 
-        to_delete.each do |instance_id|
-          @compute.delete_server(server_id)
-        end
+        # de-register nodes from LB
+        lb_ids = to_delete.map { |instance_id| { instance_id: instance_id } }
 
-        @load_balancers.delete_nodes(@config['load_balancer']['id'], to_delete)
+        @lb.deregister_instances_from_load_balancer(
+          load_balancer_name: @config['load_balancer']['name'],
+          instances: lb_ids
+        )
+
+        # delete instances
+        @ec2.terminate_instances(instance_ids: to_delete)
       end
   end
 end

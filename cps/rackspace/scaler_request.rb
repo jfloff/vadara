@@ -18,7 +18,7 @@ module RackspaceVadara
         self.instance_variable_set var, val
       end
 
-      if (defined?('horizontal_scale_up')).nil?
+      if (defined?('horizontal_scale_up')).nil? or @horizontal_scale_up.nil?
         @horizontal_scale_up = 0
       elsif @horizontal_scale_up.has_key? 'rackspace'
         @horizontal_scale_up = @horizontal_scale_up['rackspace']
@@ -26,7 +26,7 @@ module RackspaceVadara
         0
       end
 
-      if (defined?('horizontal_scale_down')).nil?
+      if (defined?('horizontal_scale_down')).nil? or @horizontal_scale_down.nil?
         @horizontal_scale_down = []
       elsif @horizontal_scale_down.has_key? 'rackspace'
         @horizontal_scale_down = @horizontal_scale_down['rackspace']
