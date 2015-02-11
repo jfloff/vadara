@@ -1,4 +1,4 @@
-require 'bunny'
+ require 'bunny'
 require 'json'
 require 'require_all'
 require_rel 'monitor_request.rb'
@@ -40,28 +40,39 @@ module Vadara
         providers_channel_fanout = providers_channel.fanout(@config[:queues][:monitor][:fanout])
 
         puts " [vadara][monitor] Waiting `decider` messages"
-        monitor_queue.subscribe(:block => true) do |delivery_info, properties, body|
-          request = MonitorRequest.new JSON.parse(body)
+        monitor_queue.subscribe(:block => true) do |delivery_info, properties, payload|
+          request = decider_request_to_providers(payload)
 
-          providers_channel_fanout.publish(request.to_json)
+          providers_channel_fanout.publish(request)
           puts " [vadara][monitor] Sent CP request"
-          puts " [vadara][monitor] request = " + request.to_json
+          puts " [vadara][monitor] request = " + payload
         end
+      end
+
+      def decider_request_to_providers(payload)
+        return payload
       end
 
       def reply_to_decider
         providers_channel = @conn.create_channel
         providers_reply_queue = providers_channel.queue(@config[:queues][:monitor][:reply])
 
+        decider_reply_channel = @conn.create_channel
+        decider_queue = decider_reply_channel.default_exchange
+
         puts " [vadara][monitor] Waiting CPs replies"
-        providers_reply_queue.subscribe(:block => true) do |delivery_info, properties, body|
-          request = JSON.parse(body)
+        providers_reply_queue.subscribe(:block => true) do |delivery_info, properties, payload|
+          reply = providers_reply_to_decider(payload)
 
           puts " [vadara][monitor] Received CP reply"
-          puts " [vadara][monitor] reply = " + request.to_json
+          puts " [vadara][monitor] reply = " + reply
 
-          # aggregate requests from CPs??
+          decider_queue.publish(reply, routing_key: @config[:queues][:decider][:reply])
         end
+      end
+
+      def providers_reply_to_decider(payload)
+        return payload
       end
   end
 end

@@ -11,6 +11,8 @@ queues:
   scaler:
     request: 'vadara-scaler-request'
     reply: 'vadara-scaler-reply'
+  decider:
+    reply: 'vadara-decider'
 
 #########################################################################################
 ####################################### DATABASE ########################################

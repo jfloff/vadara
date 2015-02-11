@@ -5,10 +5,10 @@ cps:
   aws:
     active: true
     run: 'ruby cps/aws/core.rb'
-    full_period_unit: 'h' # options: h(hour), m(minute), s(seconds)
+    full_period_unit: 's' # options: h(hour), m(minute), s(seconds)
 
   rackspace:
-    active: false
+    active: true
     run: 'ruby cps/rackspace/core.rb'
     full_period_unit: 's'
 
@@ -27,6 +27,8 @@ queues:
     request: 'vadara-scaler-request'
     reply: 'vadara-scaler-reply'
     fanout: 'vadara-scaler'
+  decider:
+    reply: 'vadara-decider'
 
 #########################################################################################
 ####################################### DATABASE ########################################

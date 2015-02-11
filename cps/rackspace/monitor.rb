@@ -44,15 +44,16 @@ module RackspaceVadara
           puts " [rackspace][monitor] Waiting for messages"
           provider_queue.subscribe(:block => true) do |delivery_info, properties, body|
 
-            # request
-            request = request(body)
             puts " [rackspace][monitor] Received request"
 
-            # reply to queue
-            reply = JSON.generate(reply(request))
+            replies = []
+            JSON.parse(body).each do |request_body|
+              request = request_from_json(request_body)
+              replies << reply(request)
+            end
 
             # send reply to queue
-            channel.default_exchange.publish(reply,
+            channel.default_exchange.publish(replies.json,
               headers: { vadara: { provider: 'rackspace' } },
               routing_key: reply_queue.name)
             puts " [rackspace][monitor] Sent reply!"
@@ -66,9 +67,9 @@ module RackspaceVadara
     end
 
     private
-      def request(body)
-        # Monitor request from JSON
-        return MonitorRequest.new JSON.parse(body)
+      # Monitor request from JSON
+      def request_from_json(body)
+        request = MonitorRequest.new body
       end
 
       def reply(request)

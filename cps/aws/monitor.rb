@@ -41,16 +41,14 @@ module AwsVadara
           puts " [aws][monitor] Waiting for messages"
           provider_queue.subscribe(:block => true) do |delivery_info, properties, body|
 
-            # request
-            request = request(body)
-            puts " [aws][monitor] Received request"
-
-            # reply to queue
-            reply = JSON.generate(reply(request))
-            # puts " [aws][monitor] " + reply
+            replies = []
+            JSON.parse(body).each do |request_body|
+              request = request_from_json(request_body)
+              replies << reply(request)
+            end
 
             # send reply to queue
-            channel.default_exchange.publish(reply,
+            channel.default_exchange.publish(replies.to_json,
               headers: { vadara: { provider: 'aws' } },
               routing_key: reply_queue.name)
             puts " [aws][monitor] Sent reply!"
@@ -63,10 +61,11 @@ module AwsVadara
       }
     end
 
-    # private
-      def request(body)
-        # Monitor request from JSON
-        return MonitorRequest.new JSON.parse(body)
+    private
+
+      # Monitor request from JSON
+      def request_from_json(body)
+        request = MonitorRequest.new body
       end
 
       def reply(request)
@@ -74,17 +73,17 @@ module AwsVadara
           when 'cpu_usage'
             reply_to_cpu_usage(request.statistics, request.start_time, request.end_time, request.period, request.detail)
           when 'request_count'
-            reply_to_request_count(request.start_time, request.end_time, request.period)
+            reply_to_request_count(request.start_time, request.end_time, request.period, request.detail)
         end
       end
 
-      def reply_to_request_count(start_time, end_time, period)
+      def reply_to_request_count(start_time, end_time, period, detail)
         options = {
           # http://docs.aws.amazon.com/AmazonCloudWatch/latest/DeveloperGuide/aws-namespaces.html
           namespace: 'AWS/ELB',
           # http://docs.aws.amazon.com/AmazonCloudWatch/latest/DeveloperGuide/elb-metricscollected.html
           metric_name: 'RequestCount',
-          statistics: ['Sum', 'Maximum', 'Minimum', 'SampleCount', 'Average'],
+          statistics: ['Sum'],
           start_time: start_time,
           end_time: end_time,
           period: period,
@@ -97,9 +96,26 @@ module AwsVadara
         # http://docs.aws.amazon.com/AmazonCloudWatch/latest/APIReference/API_GetMetricStatistics.html
         result = @cw.get_metric_statistics(options)
 
-        reply = Array.new
-        result[:datapoints].each do |datapoint|
-          reply << datapoint.to_h
+        reply = Hash.new
+
+        case detail
+        when 'detailed'
+          result[:datapoints].each do |datapoint|
+            timestamp = datapoint['timestamp'].to_i
+
+            reply[] = datapoint['sum']
+          end
+
+        when 'condensed'
+          total_requests = 0
+          timestamp = 0
+          result[:datapoints].each do |datapoint|
+            timestamp = datapoint['timestamp'].to_i
+            total_requests += datapoint['sum']
+          end
+
+          reply[timestamp] = total_requests unless timestamp == 0
+
         end
 
         return reply
@@ -130,7 +146,7 @@ module AwsVadara
 
               result = @cw.get_metric_statistics(options)
               result[:datapoints].each do |datapoint|
-                timestamp = datapoint['timestamp']
+                timestamp = datapoint['timestamp'].to_i
 
                 all_datapoints[timestamp] = Hash.new unless all_datapoints.has_key? timestamp
 

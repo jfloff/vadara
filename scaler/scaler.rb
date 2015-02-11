@@ -225,9 +225,6 @@ module Vadara
           loop do
             instances_to_delete = Hash.new
 
-            print " [vadara][core] instances waiting shutdown: "
-            puts @instances_near_full_hour
-
             @lock.synchronize {
               @instances_near_full_hour.each do |provider, instances_near_full_hour_by_provider|
 
